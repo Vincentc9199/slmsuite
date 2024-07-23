@@ -171,8 +171,7 @@ class ScreenMirrored(SLM):
         # Setup the window. If failure, closes elegantly upon except().
         try:
             # Make the window and do basic setup.
-            self.window = pyglet.window.Window( screen=screen,
-                                                fullscreen=True, vsync=True)
+            self.window = pyglet.window.Window(screen=screen, fullscreen=False, vsync=True)
             self.window.set_caption(self.name)
             self.window.set_mouse_visible(False)
 
@@ -298,7 +297,8 @@ class ScreenMirrored(SLM):
         # Display the other side of the double buffer.
         # (with vsync enabled, this will block until the next frame is ready to display).
         self.window.flip()
-
+        #self.window.on_draw = lambda: self.window.flip()
+        
     def close(self):
         """Closes frame. See :class:`.SLM`."""
         self.window.close()

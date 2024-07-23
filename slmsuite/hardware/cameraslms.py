@@ -8,7 +8,7 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import optimize
-from tqdm.autonotebook import tqdm
+from tqdm import tqdm
 
 from slmsuite.holography import analysis
 from slmsuite.holography import toolbox
@@ -555,7 +555,7 @@ class FourierSLM(CameraSLM):
         """
         Perform wavefront calibration.
         This procedure involves `iteratively interfering light diffracted from
-        superpixels across an SLM with a reference superpixel <https://doi.org/10.1038/nphoton.2010.85>`_.
+        superpixels across an SLM with a reference superpixel <https://doi.org/10.1038/nphoton.2010.8>`_.
         Interference occurs at a given ``interference_point`` in the camera's imaging plane.
         It is at this point where the computed correction is ideal; the further away
         from this point, the less ideal the correction is.
@@ -563,11 +563,8 @@ class FourierSLM(CameraSLM):
         Run :meth:`~slmsuite.hardware.cameraslms.FourierSLM.process_wavefront_calibration`
         after to produce the usable calibration which is written to the SLM.
         This procedure measures the wavefront phase and amplitude.
-
-        Tip
-        ~~~
         If only amplitude calibration is desired,
-        set ``phase_steps=0`` to omit the more time consuming phase calibration.
+        set ``phase_steps=0`` to omit the phase calibration.
 
         Parameters
         ----------
@@ -716,12 +713,10 @@ class FourierSLM(CameraSLM):
             if key not in correction_dict.keys():
                 correction_dict.update({key: np.zeros((NY, NX), dtype=np.float32)})
 
-        # Save the current calibration in case we are just testing (test_superpixel != None)
+        # Remove the current calibration
         measured_amplitude = self.slm.measured_amplitude
-        phase_correction = self.slm.phase_correction
+        phase_correction = self.slm.measured_amplitude
 
-        # If we're starting fresh, remove the old calibration such that this does not
-        # muddle things. If we're only testing, the stored data above will be reinstated.
         if fresh_calibration:
             self.slm.measured_amplitude = None
             self.slm.phase_correction = None
@@ -1073,6 +1068,10 @@ class FourierSLM(CameraSLM):
             if plot:
                 plot_labeled(interference_image, plot=plot, title="Best Interference")
 
+            if test_superpixel is not None:
+                self.slm.measured_amplitude = measured_amplitude
+                self.slm.phase_correction = phase_correction
+
             if return_movie: return frames
 
             return {
@@ -1115,16 +1114,10 @@ class FourierSLM(CameraSLM):
 
         # If we just want to debug/test one region, then do so.
         if test_superpixel is not None:
-            result = measure(test_superpixel, plot=plot_fits)
-
-            # Reset the phase and amplitude of the SLM to the stored data.
-            self.slm.measured_amplitude = measured_amplitude
-            self.slm.phase_correction = phase_correction
-
-            return result
+            return measure(test_superpixel, plot=plot_fits)
 
         # Otherwise, proceed with all of the superpixels.
-        for n in tqdm(range(NX * NY), position=1, leave=True, desc="calibration"):
+        for n in tqdm(range(NX * NY), position=0, leave=False, desc="calibration"):
             nx = int(n % NX)
             ny = int(n / NX)
 
@@ -1220,7 +1213,6 @@ class FourierSLM(CameraSLM):
             norm = cv2.GaussianBlur(norm, (size_blur_k, size_blur_k), 0)
 
         back = np.copy(data["background"])
-        back[np.isnan(back)] = 0
         average_neighbors(back)
         if smooth:
             back = cv2.GaussianBlur(back, (size_blur_k, size_blur_k), 0)
@@ -1394,8 +1386,7 @@ class FourierSLM(CameraSLM):
                 mindiff = fom
 
         wavefront_calibration = {   "phase_correction":phase_fin,
-                                    "measured_amplitude":amp_large,
-                                    "r2":r2}
+                                    "measured_amplitude":amp_large}
 
         # Step 4: Load the correction to the SLM
         if apply:
@@ -1409,7 +1400,6 @@ class FourierSLM(CameraSLM):
             plt.subplot(1, 3, 1)
             plt.imshow(
                 phase_fin,
-                clim=(0,2*np.pi),
                 cmap=plt.get_cmap("twilight"),
                 interpolation="none",
             )
@@ -1418,13 +1408,13 @@ class FourierSLM(CameraSLM):
             plt.ylabel("SLM $y$ [pix]")
 
             plt.subplot(1, 3, 2)
-            plt.imshow(amp_large, clim=(0,1))
+            plt.imshow(amp_large)
             plt.title("Measured Beam Amplitude")
             plt.xlabel("SLM $x$ [pix]")
             plt.ylabel("SLM $y$ [pix]")
 
             plt.subplot(1, 3, 3)
-            plt.imshow(r2, clim=(0,1))
+            plt.imshow(r2)
             plt.title("$R^2$")
             plt.xlabel("SLM $x$ [superpix]")
             plt.ylabel("SLM $y$ [superpix]")

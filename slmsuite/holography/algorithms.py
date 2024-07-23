@@ -66,10 +66,11 @@ See the first tip in :class:`Hologram` to learn more about ``"kxy"`` and ``"knm"
 space.
 """
 
+from flask_socketio import SocketIO, emit
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import cv2
-from tqdm.autonotebook import tqdm
+from tqdm import tqdm
 import warnings
 import pprint
 
@@ -100,6 +101,8 @@ from slmsuite.holography import analysis, toolbox
 from slmsuite.misc.math import REAL_TYPES
 from slmsuite.misc.files import write_h5, read_h5
 from slmsuite.misc.fitfunctions import gaussian2d
+
+import os
 
 # List of algorithms and default parameters
 # See algorithm documentation for parameter definitions.
@@ -277,7 +280,7 @@ class Hologram:
         See :meth:`.update_stats()` and :meth:`.plot_stats()`.
     """
 
-    def __init__(self, target, amp=None, phase=None, slm_shape=None, dtype=np.float32):
+    def __init__(self, target, amp=None, phase=None, slm_shape=None, dtype=np.float32, socketio=None):
         r"""
         Initialize datastructures for optimization.
         When :mod:`cupy` is enabled, arrays are initialized on the GPU as :mod:`cupy` arrays:
@@ -311,6 +314,8 @@ class Hologram:
         dtype : type
             See :attr:`dtype`; type to use for stored arrays.
         """
+        self.socketio = socketio
+
         # 1) Parse inputs
         # Parse target and create shape.
         if len(target) == 2:  # (int, int) was passed.
@@ -399,7 +404,8 @@ class Hologram:
         if amp is None:     # Uniform amplitude by default (scalar).
             self.amp = 1 / np.sqrt(np.prod(self.slm_shape))
         else:               # Otherwise, initialize and normalize.
-            self.amp = cp.array(amp, dtype=dtype, copy=False)
+            self.amp = np.asarray(amp, dtype=dtype)
+            #self.amp = cp.array(amp, dtype=dtype, copy=False)
             self.amp *= 1 / Hologram._norm(self.amp)
 
         # Initialize near-field phase
@@ -603,7 +609,7 @@ class Hologram:
     ):
         r"""
         Optimizers to solve the "phase problem": approximating the near-field phase that
-        transforms a known near-field source amplitude to a desired far-field
+        transforms a known near-field source amplitude to a desired near-field
         target amplitude.
         Supported optimization methods include:
 
@@ -642,7 +648,7 @@ class Hologram:
             ``'WGS-Kim'``
 
               `Improves the convergence <https://doi.org/10.1364/OL.44.003178>`_
-              of ``WGS-Leonardo`` by fixing the far-field phase
+              of `Leonardo` by fixing the far-field phase
               strictly after a desired number of net iterations
               specified by ``"fix_phase_iteration"``
               or after exceeding a desired efficiency
@@ -815,15 +821,15 @@ class Hologram:
 
         # 3) Switch between optimization methods (currently only GS- or WGS-type is supported).
         if "GS" in method:
-            self.GS(iterations, callback)
+            self.GS(iterations, callback, maxiter)
 
     # Optimization methods (currently only GS- or WGS-type is supported).
-    def GS(self, iterations, callback):
+    def GS(self, iterations, callback, maxiter):
         """
         GPU-accelerated Gerchberg-Saxton (GS) iterative phase retrieval.
 
         Solves the "phase problem": approximates the near-field phase that
-        transforms a known near-field source amplitude to a desired far-field
+        transforms a known near-field source amplitude to a known near-field
         target amplitude.
 
         Caution
@@ -860,7 +866,7 @@ class Hologram:
         # Helper variables for speeding up source phase and amplitude fixing.
         (i0, i1, i2, i3) = toolbox.unpad(self.shape, self.slm_shape)
 
-        for _ in iterations:
+        for idx, _ in enumerate(iterations):
             # 1) Nearfield -> farfield
             # 1.1) Fix the relevant part of the nearfield amplitude to the source amplitude.
             # Everything else is zero because power outside the SLM is assumed unreflected.
@@ -897,6 +903,11 @@ class Hologram:
 
             # 3.2) Increment iteration.
             self.iter += 1
+
+            # Emit progress update
+            progress = (idx + 1) / maxiter * 100
+            #print(f"Emitting progress: {progress}%")
+            self.socketio.emit('progress', {'progress': progress})
 
         # Update the final far-field
         nearfield.fill(0)
@@ -1531,7 +1542,7 @@ class Hologram:
         return limits
 
     def plot_nearfield(self, title="", padded=False,
-                       figsize=(8,4), cbar=False):
+                       figsize=(8,4), cbar=False, save_img=False):
         """
         Plots the amplitude (left) and phase (right) of the nearfield (plane of the SLM).
         The amplitude is assumed (whether uniform, or experimentally computed) while the
@@ -1604,11 +1615,17 @@ class Hologram:
             fig.colorbar(im_phase, cax=cax, orientation='vertical', format = r"%1.1f$\pi$")
 
         fig.tight_layout()
-        plt.show()
+        #plt.show()
+        if save_img is True:
+            save_path = os.path.join(os.getcwd(), 'static', 'images', 'slmplane.png')
+            fig.savefig(save_path)
+            plt.close(fig)
+        else:
+            plt.show()
 
     def plot_farfield(
             self, source=None, title="", limits=None, units="knm",
-            limit_padding=0.1, figsize=(8,4), cbar=False,
+            limit_padding=0.1, figsize=(8,4), cbar=False, save_img=False, for_target=False
         ):
         """
         Plots an overview (left) and zoom (right) view of ``source``.
@@ -1742,16 +1759,16 @@ class Hologram:
                 ext_nm = img.get_extent()
                 ext_min = np.squeeze(toolbox.convert_blaze_vector(
                     [ext_nm[0], ext_nm[-1]],
-                    from_units="knm",
+                    from_units="knm", 
                     to_units=to_units,
-                    slm=slm,
+                    slm=slm, 
                     shape=npsource.shape
                 ))
                 ext_max = np.squeeze(toolbox.convert_blaze_vector(
                     [ext_nm[1], ext_nm[2]],
-                    from_units="knm",
+                    from_units="knm", 
                     to_units=to_units,
-                    slm=slm,
+                    slm=slm, 
                     shape=npsource.shape
                 ))
                 img.set_extent([ext_min[0] ,ext_max[0], ext_max[1], ext_min[1]])
@@ -1799,9 +1816,9 @@ class Hologram:
             else:
                 cam_points = toolbox.convert_blaze_vector(
                     self.cam_points,
-                    from_units="knm",
+                    from_units="knm", 
                     to_units=units,
-                    slm=slm,
+                    slm=slm, 
                     shape=npsource.shape
                 )
 
@@ -1858,11 +1875,20 @@ class Hologram:
             fig.colorbar(zoom, cax=cax, orientation='vertical')
 
         plt.tight_layout()
-        plt.show()
+        #plt.show()
+        if save_img is True:
+            if for_target is True:
+                save_path = os.path.join(os.getcwd(), 'static', 'images', 'target.png')
+            else:
+                save_path = os.path.join(os.getcwd(), 'static', 'images', 'farfield.png')
+            fig.savefig(save_path)
+            plt.close(fig)
+        else:
+            plt.show()
 
         return limits
 
-    def plot_stats(self, stats_dict=None, stat_groups=[], ylim=None):
+    def plot_stats(self, stats_dict=None, stat_groups=[], ylim=None, save_img=False):
         """
         Plots the statistics contained in the given dictionary.
 
@@ -1954,7 +1980,13 @@ class Hologram:
 
         ax.set_xlim([-.75, len(stats_dict["method"]) - .25])
 
-        plt.show()
+        #plt.show()
+        if save_img is True:
+            save_path = os.path.join(os.getcwd(), 'static', 'images', 'stats.png')
+            plt.savefig(save_path)
+            plt.close()
+        else:
+            plt.show()
 
         return ax
 
@@ -2066,7 +2098,7 @@ class FeedbackHologram(Hologram):
         Measured with :meth:`.measure()`.
     """
 
-    def __init__(self, shape, target_ij=None, cameraslm=None, **kwargs):
+    def __init__(self, shape, target_ij=None, cameraslm=None, socketio=None, **kwargs):
         """
         Initializes a hologram with camera feedback.
 
@@ -2113,7 +2145,7 @@ class FeedbackHologram(Hologram):
         if not "slm_shape" in kwargs:
             kwargs["slm_shape"] = slm_shape
 
-        super().__init__(target=shape, amp=amp, **kwargs)
+        super().__init__(target=shape, amp=amp, socketio=socketio, **kwargs)
 
         self.img_ij = None
         self.img_knm = None
@@ -2456,6 +2488,7 @@ class SpotHologram(FeedbackHologram):
         null_region=None,
         null_region_radius_frac=None,
         subpixel=False,
+        socketio=None,
         **kwargs
     ):
         """
@@ -2520,6 +2553,7 @@ class SpotHologram(FeedbackHologram):
         **kwargs
             Passed to :meth:`.FeedbackHologram.__init__()`.
         """
+
         # Parse vectors.
         vectors = toolbox.format_2vectors(spot_vectors)
 
@@ -2705,7 +2739,7 @@ class SpotHologram(FeedbackHologram):
             self.null_radius_knm = int(np.ceil(self.null_radius_knm))
 
         # Initialize target/etc.
-        super().__init__(shape, target_ij=None, cameraslm=cameraslm, **kwargs)
+        super().__init__(shape, target_ij=None, cameraslm=cameraslm, socketio=socketio, **kwargs)
 
         # Parse null_region after __init__
         if basis == "ij" and null_region is not None:
@@ -2996,8 +3030,7 @@ class SpotHologram(FeedbackHologram):
         """
         # If no image was provided, get one from cache.
         if img is None:
-            self.measure(basis="ij")
-            img = self.img_ij
+            img = self.measure(basis="ij")
 
         # Take regions around each point from the given image.
         regions = analysis.take(
