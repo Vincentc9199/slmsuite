@@ -171,7 +171,7 @@ class ScreenMirrored(SLM):
         # Setup the window. If failure, closes elegantly upon except().
         try:
             # Make the window and do basic setup.
-            self.window = pyglet.window.Window(screen=screen, fullscreen=False, vsync=True)
+            self.window = pyglet.window.Window(screen=screen, fullscreen=True, vsync=True)
             self.window.set_caption(self.name)
             self.window.set_mouse_visible(False)
 
